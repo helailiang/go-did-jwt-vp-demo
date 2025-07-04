@@ -1,7 +1,6 @@
 package main
 
 import (
-	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -75,17 +74,6 @@ type VerifiablePresentationV2 struct {
 	VerifiableCredential []EnvelopedVerifiableCredential `json:"verifiableCredential"`
 }
 
-// Ed25519Signature2020 proof结构
-// https://www.w3.org/TR/vc-data-model-2.0/#data-integrity-proofs
-
-type Proof struct {
-	Type               string `json:"type"`
-	Created            string `json:"created"`
-	VerificationMethod string `json:"verificationMethod"`
-	ProofPurpose       string `json:"proofPurpose"`
-	SignatureValue     string `json:"signatureValue"`
-}
-
 func main() {
 	fmt.Println("🎓 学校 VC 和 🛒 商店 VC 选择性披露演示")
 	fmt.Println(strings.Repeat("=", 60))
@@ -108,15 +96,15 @@ func main() {
 
 	// =================== 学校颁发 VC ===================
 	fmt.Println("\n🏫 学校颁发 VC...")
-	schoolSDJWT, err := issueSchoolVC("did:example:student:001", schoolInfo)
+	schoolVC, err := issueSchoolVC("did:example:student:001", schoolInfo)
 	if err != nil {
 		panic("学校颁发 VC 失败: " + err.Error())
 	}
 	fmt.Println("✅ 学校 VC 颁发成功")
 
 	// =================== 商店颁发 VC ===================
-	fmt.Println("\n�� 商店颁发 VC...")
-	shopSDJWT, err := issueShopVC("did:example:student:001", shopInfo)
+	fmt.Println("\n🛒 商店颁发 VC...")
+	shopVC, err := issueShopVC("did:example:student:001", shopInfo)
 	if err != nil {
 		panic("商店颁发 VC 失败: " + err.Error())
 	}
@@ -127,7 +115,7 @@ func main() {
 
 	fmt.Println("学校 VC 选择性披露：只披露学号、专业")
 	// 学校 VC 选择性披露：只披露学号、专业
-	schoolVP, err := presentSDJWT(schoolSDJWT, []string{"student_id", "major"})
+	schoolVP, err := presentSDJWT(schoolVC, []string{"student_id", "major"})
 	if err != nil {
 		panic("学校 VC 选择性披露失败: " + err.Error())
 	}
@@ -135,7 +123,7 @@ func main() {
 
 	// 商店 VC 选择性披露：只披露会员号
 	fmt.Println("商店 VC 选择性披露：只披露会员号")
-	shopVP, err := presentSDJWT(shopSDJWT, []string{"member_id"})
+	shopVP, err := presentSDJWT(shopVC, []string{"member_id"})
 	if err != nil {
 		panic("商店 VC 选择性披露失败: " + err.Error())
 	}
@@ -215,7 +203,7 @@ func main() {
 
 	// 显示具体的披露内容
 	fmt.Println("\n📋 选择性披露详情:")
-	fmt.Println("�� 学校 VC 披露内容:")
+	fmt.Println("🏫 学校 VC 披露内容:")
 	fmt.Printf("   - 学号: %s\n", schoolInfo.StudentID)
 	fmt.Printf("   - 专业: %s\n", schoolInfo.Major)
 	fmt.Println("   - 隐藏: 姓名、年龄、成绩")
@@ -226,67 +214,6 @@ func main() {
 
 	fmt.Println("\n✅ 选择性披露演示完成！")
 	fmt.Println("💡 验证者只能看到学号、专业、会员号，无法看到姓名、年龄、成绩、积分等敏感信息")
-
-	// ========== 1. 生成 Ed25519 密钥对（holder） ==========
-	holderDID := "did:example:12345678"
-	_, priv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		panic(err)
-	}
-
-	// ========== 2. 构造商店 VC（自我声明） ==========
-	shopVC := map[string]interface{}{
-		"@context": []string{
-			"https://www.w3.org/ns/credentials/v2",
-			"https://www.w3.org/ns/credentials/examples/v2",
-		},
-		"type":   []string{"VerifiableCredential", "ExampleAssertCredential"},
-		"issuer": holderDID,
-		"credentialSubject": map[string]interface{}{
-			"id":        "urn:uuid:313801ba-24b7-11ee-be02-ff560265cf9b",
-			"assertion": "This VP is submitted by the subject as evidence of a legal right to drive",
-		},
-	}
-	// 3. Ed25519Signature2020签名商店VC
-	shopVCNoProof, _ := json.Marshal(shopVC)
-	shopVCProof := Proof{
-		Type:               "Ed25519Signature2020",
-		Created:            time.Now().UTC().Format(time.RFC3339),
-		VerificationMethod: holderDID + "#key-1",
-		ProofPurpose:       "assertionMethod",
-		SignatureValue:     signWithEd25519(shopVCNoProof, priv),
-	}
-	shopVC["proof"] = shopVCProof
-
-	// 4. 构造 VP
-	vp1 := map[string]interface{}{
-		"@context": []string{
-			"https://www.w3.org/ns/credentials/v2",
-			"https://www.w3.org/ns/credentials/examples/v2",
-		},
-		"type":   []string{"VerifiablePresentation", "ExamplePresentation"},
-		"id":     "urn:uuid:313801ba-24b7-11ee-be02-ff560265cf9b",
-		"holder": holderDID,
-		"verifiableCredential": []interface{}{
-			envelopedSchoolVC, // SD-JWT信封
-			shopVC,            // 商店VC（自我声明+proof）
-		},
-	}
-	vpNoProof, _ := json.Marshal(vp1)
-	vpProof := Proof{
-		Type:               "Ed25519Signature2020",
-		Created:            time.Now().UTC().Format(time.RFC3339),
-		VerificationMethod: holderDID + "#key-1",
-		ProofPurpose:       "authentication",
-		SignatureValue:     signWithEd25519(vpNoProof, priv),
-	}
-	vp1["proof"] = vpProof
-
-	// 5. 输出最终 VP JSON
-	fmt.Println("\n================== W3C v2 VP (SD-JWT信封+自我声明VC) ==================")
-	finalVPJson, _ := json.MarshalIndent(vp1, "", "  ")
-	fmt.Println(string(finalVPJson))
-	fmt.Println("===============================================================\n")
 }
 
 // 学校颁发 VC
@@ -786,9 +713,4 @@ func contains(slice []string, s string) bool {
 func prettyPrint(v interface{}) {
 	bytes, _ := json.MarshalIndent(v, "", "  ")
 	fmt.Println(string(bytes))
-}
-
-func signWithEd25519(data []byte, priv ed25519.PrivateKey) string {
-	sig := ed25519.Sign(priv, data)
-	return base64.RawURLEncoding.EncodeToString(sig)
 }
